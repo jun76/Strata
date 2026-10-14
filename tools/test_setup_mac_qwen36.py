@@ -8,6 +8,13 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'metal'))
 import setup_mac as M
 
 class Qwen36Mac(unittest.TestCase):
+    def test_iq2_is_mac_only_and_pinned(self):
+        self.assertIn("UD-IQ2_XXS",M.Q36_MODELS)
+        self.assertNotIn("UD-IQ2_XXS",M.S.OWN_PATH_FAMILIES["qwen36"]["models"])
+        size,sha=M.Q36_HASHES["Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf"]
+        self.assertEqual(size,11819399456)
+        self.assertEqual(sha,"627e2b05f83088448e27861ec392d56efc2b178783cae5adfa4ad2d988441203")
+
     def test_context_boundaries(self):
         self.assertEqual(M.q36_args(Path('/model.gguf'),4096),['--native','/model.gguf','--max-context','4096'])
         for n in (0,-1,4097,32768):

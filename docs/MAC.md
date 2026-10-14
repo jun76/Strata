@@ -38,7 +38,7 @@ with 32 GB, where the experts stream from the SSD. Other chips and memory sizes 
 ## Install
 
 This fork also has an opt-in, experimental **Qwen3.6-35B-A3B** Metal path:
-`./setup.sh --family qwen36 --model UD-Q4_K_XL --context 4096 --vision no`.
+`./setup.sh --family qwen36 --model UD-IQ2_XXS --context 4096 --vision no`.
 It streams the selected experts from the GGUF rather than loading all experts into unified memory.
 Text only, no MTP, at most 4K context; see [MAC_QWEN36.md](MAC_QWEN36.md) for validation and limits.
 

@@ -20,7 +20,7 @@ const char* type_name(int t) {
         case F32: return "F32"; case F16: return "F16"; case BF16: return "BF16";
         case Q4_0: return "Q4_0"; case Q5_0: return "Q5_0"; case Q5_1: return "Q5_1"; case Q8_0: return "Q8_0";
         case Q3_K: return "Q3_K"; case Q4_K: return "Q4_K"; case Q5_K: return "Q5_K"; case Q6_K: return "Q6_K";
-        case IQ2_XXS: return "IQ2_XXS"; case IQ2_XS: return "IQ2_XS"; case IQ2_S: return "IQ2_S";
+        case Q2_K: return "Q2_K"; case IQ2_XXS: return "IQ2_XXS"; case IQ2_XS: return "IQ2_XS"; case IQ2_S: return "IQ2_S";
         case IQ3_XXS: return "IQ3_XXS"; case IQ3_S: return "IQ3_S"; case IQ4_NL: return "IQ4_NL";
         case IQ4_XS: return "IQ4_XS"; case Q2_0: return "Q2_0";
     }
@@ -40,7 +40,7 @@ int block_bytes(int t) {
     switch (t) {
         case F32: return 4; case F16: case BF16: return 2;
         case Q4_0: return 18; case Q5_0: return 22; case Q5_1: return 24; case Q8_0: return 34; case IQ4_NL: return 18; case Q2_0: return 18;
-        case Q3_K: return 110; case Q4_K: return 144; case Q5_K: return 176; case Q6_K: return 210;
+        case Q2_K: return 84; case Q3_K: return 110; case Q4_K: return 144; case Q5_K: return 176; case Q6_K: return 210;
         case IQ2_XXS: return 66; case IQ2_XS: return 74; case IQ2_S: return 82; case IQ3_XXS: return 98;
         case IQ3_S: return 110; case IQ4_XS: return 136;
     }
@@ -232,6 +232,24 @@ static void deq_block(int t, const uint8_t* b, float* y) {
                 is += 2;
                 u1 <<= 2;
                 u2 <<= 2;
+            }
+            return;
+        }
+        case Q2_K: {
+            const float d = f16_to_f32(rd16(b+80)), mn=f16_to_f32(rd16(b+82));
+            const uint8_t *q=b+16;
+            int index=0;
+            for(int n=0;n<256;n+=128) {
+                int shift=0;
+                for(int j=0;j<4;++j) {
+                    for(int half=0;half<2;++half) {
+                        const uint8_t sc=b[index++];
+                        const float ds=d*(sc&15), ms=mn*(sc>>4);
+                        for(int l=0;l<16;++l) *y++=ds*((q[16*half+l]>>shift)&3)-ms;
+                    }
+                    shift+=2;
+                }
+                q+=32;
             }
             return;
         }
@@ -433,6 +451,7 @@ void random_blocks(int t, uint8_t* dst, int rows, int cols, uint64_t seed, float
             case IQ4_XS: put16(b, f32_to_f16(scale * u / 64 / 16)); break;
             case Q4_K: case Q5_K: put16(b, f32_to_f16(scale * u / 32 / 8)); put16(b + 2, f32_to_f16(scale * u / 32 / 2)); break;
             case Q6_K: put16(b + 208, f32_to_f16(scale * u / 32 / 64)); break;
+            case Q2_K: put16(b+80, f32_to_f16(scale*u/16)); put16(b+82, f32_to_f16(scale*u/16)); break;
             case Q3_K: put16(b + 108, f32_to_f16(scale * u / 32 / 2)); break;
             case IQ2_XXS: case IQ2_XS: case IQ2_S: put16(b, f32_to_f16(scale * u / 4)); break;
             case IQ3_XXS: put16(b, f32_to_f16(scale * u / 8)); break;

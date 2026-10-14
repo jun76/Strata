@@ -24,7 +24,21 @@
 #include <vector>
 namespace {
 constexpr int kThreads = 128;
-enum : int { T_F32 = 0, T_F16 = 1, T_Q8_0 = 8, T_Q4_K = 12, T_Q5_K = 13, T_Q6_K = 14, T_BF16 = 30 };
+enum : int {
+    T_F32 = 0,
+    T_F16 = 1,
+    T_Q8_0 = 8,
+    T_Q2_K = 10,
+    T_Q3_K = 11,
+    T_Q4_K = 12,
+    T_Q5_K = 13,
+    T_Q6_K = 14,
+    T_IQ2_XXS = 16,
+    T_IQ3_XXS = 18,
+    T_IQ2_S = 22,
+    T_IQ4_XS = 23,
+    T_BF16 = 30
+};
 mtl::Context cx;
 int lib;
 std::map<std::string, mtl::Pipeline> pipes;
@@ -184,7 +198,8 @@ bool load(const std::string &path, Model &m, std::string &err) {
             Tensor w;
             w.type = (int)ti.type;
             if (w.type != T_F32 && w.type != T_F16 && w.type != T_BF16 && w.type != T_Q8_0 && w.type != T_Q4_K &&
-                w.type != T_Q5_K && w.type != T_Q6_K) {
+                w.type != T_Q5_K && w.type != T_Q6_K && w.type != T_IQ2_XXS && w.type != T_Q2_K && w.type != T_Q3_K &&
+                w.type != T_IQ3_XXS && w.type != T_IQ2_S && w.type != T_IQ4_XS) {
                 err = ti.name + ": unsupported Qwen3.6 Metal tensor type " + ti.type_name();
                 return false;
             }
@@ -639,9 +654,9 @@ int main(int argc, char **argv) {
         }
         if (ctx < 1 || ctx > 4096)
             throw std::runtime_error("experimental Metal Qwen3.6 context must be 1..4096");
-        lib = cx.compile({"q36.metal"}, "#define NO_GGML_COMMON\n");
+        lib = cx.compile({"q36.metal"});
         if (kernels_only) {
-            for (int t : {0, 1, 8, 12, 13, 14, 30}) {
+            for (int t : {0, 1, 8, 10, 11, 12, 13, 14, 16, 18, 22, 23, 30}) {
                 cx.pipeline(lib, "q36_gemv_" + std::to_string(t));
                 cx.pipeline(lib, "q36_row_" + std::to_string(t));
             }

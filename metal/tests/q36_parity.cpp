@@ -18,7 +18,7 @@ static void check(const char *name, const float *actual, const std::vector<float
     failures += !ok;
 }
 static void matmul_test() {
-    for (int type : {0, 1, 8, 12, 13, 14, 30}) {
+    for (int type : {0, 1, 8, 10, 11, 12, 13, 14, 16, 18, 22, 23, 30}) {
         constexpr int ni = 256, no = 32, k = 3;
         Tensor w;
         w.type = type;
@@ -216,7 +216,7 @@ static void attention_test() {
     check("gated grouped attention", out.as<float>(), expected);
 }
 int main() {
-    lib = cx.compile({"q36.metal"}, "#define NO_GGML_COMMON\n");
+    lib = cx.compile({"q36.metal"});
     matmul_test();
     gdn_test();
     attention_test();

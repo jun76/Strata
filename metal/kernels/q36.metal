@@ -1,7 +1,21 @@
 // Qwen3.6 decode math ported from src/qwen35/q36ref.cu (plain reference path).
 #include <metal_stdlib>
 using namespace metal;
-enum : int { T_F32 = 0, T_F16 = 1, T_Q8_0 = 8, T_Q4_K = 12, T_Q5_K = 13, T_Q6_K = 14, T_BF16 = 30 };
+enum : int {
+    T_F32 = 0,
+    T_F16 = 1,
+    T_Q8_0 = 8,
+    T_Q2_K = 10,
+    T_Q3_K = 11,
+    T_Q4_K = 12,
+    T_Q5_K = 13,
+    T_Q6_K = 14,
+    T_IQ2_XXS = 16,
+    T_IQ3_XXS = 18,
+    T_IQ2_S = 22,
+    T_IQ4_XS = 23,
+    T_BF16 = 30
+};
 
 inline float h2f(ushort h) {
     const uint s = (uint)(h >> 15) << 31, e = (h >> 10) & 0x1f, m = h & 0x3ff;
@@ -44,6 +58,81 @@ template <int T> inline void deq32(const device uchar *row, int c, thread float 
         const device char *q = (const device char *)(b + 2);
         for (int l = 0; l < 32; ++l)
             out[l] = d * (float)q[l];
+    } else if constexpr (T == T_Q2_K) {
+        const device uchar *b = row + 84 * (c >> 3);
+        const int j = c & 7;
+        const device uchar *q = b + 16 + 32 * (j >> 2);
+        const float d = h2f(ld16(b + 80)), mn = h2f(ld16(b + 82));
+        for (int l = 0; l < 32; ++l) {
+            const uint scale = b[2 * j + l / 16];
+            out[l] = d * float(scale & 15) * float((q[l] >> (2 * (j & 3))) & 3) - mn * float(scale >> 4);
+        }
+    } else if constexpr (T == T_Q3_K) {
+        const device uchar *b = row + 110 * (c >> 3);
+        const int j = c & 7;
+        uint aux[4];
+        for (int k = 0; k < 3; ++k)
+            aux[k] = uint(ld16(b + 96 + 4 * k)) | (uint(ld16(b + 98 + 4 * k)) << 16);
+        const uint packed = aux[2], lo = 0x0f0f0f0f, hi = 0x03030303;
+        aux[2] = ((aux[0] >> 4) & lo) | (((packed >> 4) & hi) << 4);
+        aux[3] = ((aux[1] >> 4) & lo) | (((packed >> 6) & hi) << 4);
+        aux[0] = (aux[0] & lo) | (((packed >> 0) & hi) << 4);
+        aux[1] = (aux[1] & lo) | (((packed >> 2) & hi) << 4);
+        const device uchar *q = b + 32 + 32 * (j >> 2);
+        const float d = h2f(ld16(b + 108));
+        for (int l = 0; l < 32; ++l) {
+            const int index = 2 * j + l / 16;
+            const int scale = int((aux[index / 4] >> (8 * (index & 3))) & 255) - 32;
+            const int val = int((q[l] >> (2 * (j & 3))) & 3) - ((b[l] & (1 << j)) ? 0 : 4);
+            out[l] = d * float(scale) * float(val);
+        }
+    } else if constexpr (T == T_IQ3_XXS) {
+        const device uchar *b = row + 98 * (c >> 3);
+        const int j = c & 7;
+        const uint packed = uint(ld16(b + 66 + 4 * j)) | (uint(ld16(b + 68 + 4 * j)) << 16);
+        const float d = h2f(ld16(b)) * (0.5f + float(packed >> 28)) * 0.5f;
+        for (int g = 0; g < 4; ++g) {
+            const uint signs = ksigns_iq2xs[(packed >> (7 * g)) & 127];
+            for (int halfgroup = 0; halfgroup < 2; ++halfgroup) {
+                const uint grid = iq3xxs_grid[b[2 + 8 * j + 2 * g + halfgroup]];
+                for (int l = 0; l < 4; ++l) {
+                    const int idx = 4 * halfgroup + l;
+                    out[8 * g + idx] = d * float((grid >> (8 * l)) & 255) * ((signs & (1 << idx)) ? -1.0f : 1.0f);
+                }
+            }
+        }
+    } else if constexpr (T == T_IQ2_S) {
+        const device uchar *b = row + 82 * (c >> 3);
+        const int j = c & 7;
+        for (int g = 0; g < 4; ++g) {
+            const uint index = uint(b[2 + 4 * j + g]) | (((uint(b[66 + j]) >> (2 * g)) & 3) << 8);
+            const ulong grid = iq2s_grid[index];
+            const uint signs = b[34 + 4 * j + g];
+            const float d = h2f(ld16(b)) * (0.5f + float((b[74 + j] >> (4 * (g / 2))) & 15)) * 0.25f;
+            for (int l = 0; l < 8; ++l)
+                out[8 * g + l] = d * float((grid >> (8 * l)) & 255) * ((signs & (1 << l)) ? -1.0f : 1.0f);
+        }
+    } else if constexpr (T == T_IQ4_XS) {
+        const device uchar *b = row + 136 * (c >> 3);
+        const int j = c & 7;
+        const int scale = int((b[4 + j / 2] >> (4 * (j & 1))) & 15) | int(((uint(ld16(b + 2)) >> (2 * j)) & 3) << 4);
+        const float d = h2f(ld16(b)) * float(scale - 32);
+        for (int l = 0; l < 32; ++l) {
+            const uint code = (b[8 + 16 * j + (l % 16)] >> (4 * (l / 16))) & 15;
+            out[l] = d * float(kvalues_iq4nl[code]);
+        }
+    } else if constexpr (T == T_IQ2_XXS) {
+        const device uchar *b = row + 66 * (c >> 3);
+        const device uchar *chunk = b + 2 + 8 * (c & 7);
+        const uint a0 = uint(ld16(chunk)) | (uint(ld16(chunk + 2)) << 16);
+        const uint a1 = uint(ld16(chunk + 4)) | (uint(ld16(chunk + 6)) << 16);
+        const float scale = h2f(ld16(b)) * (0.5f + float(a1 >> 28)) * 0.25f;
+        for (int group = 0; group < 4; ++group) {
+            const ulong grid = iq2xxs_grid[(a0 >> (8 * group)) & 255];
+            const uint signs = ksigns_iq2xs[(a1 >> (7 * group)) & 127];
+            for (int j = 0; j < 8; ++j)
+                out[8 * group + j] = scale * float((grid >> (8 * j)) & 255) * ((signs & (1u << j)) ? -1.0f : 1.0f);
+        }
     } else if constexpr (T == T_Q4_K) {
         const device uchar *b = row + 144 * (c >> 3);
         const int j = c & 7;
@@ -464,6 +553,90 @@ q36_row<14>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buf
             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
 template [[host_name("q36_row_30")]] kernel void
 q36_row<30>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_16")]] kernel void
+q36_gemv<16>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_16")]] kernel void
+q36_row<16>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_10")]] kernel void
+q36_gemv<10>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_11")]] kernel void
+q36_gemv<11>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_18")]] kernel void
+q36_gemv<18>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_22")]] kernel void
+q36_gemv<22>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_gemv_23")]] kernel void
+q36_gemv<23>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+             constant ulong &expert_bytes [[buffer(2)]], constant int &unused_ids [[buffer(3)]],
+             constant int &n_in [[buffer(4)]], const device float *x [[buffer(5)]],
+             constant ulong &x_stride [[buffer(6)]], device float *y [[buffer(7)]], constant int &n_out [[buffer(8)]],
+             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_10")]] kernel void
+q36_row<10>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_11")]] kernel void
+q36_row<11>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_18")]] kernel void
+q36_row<18>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_22")]] kernel void
+q36_row<22>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
+            constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
+            uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
+            uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);
+
+template [[host_name("q36_row_23")]] kernel void
+q36_row<23>(const device uchar *W [[buffer(0)]], constant ulong &row_bytes [[buffer(1)]],
             constant int &row [[buffer(2)]], constant int &n [[buffer(3)]], device float *out [[buffer(4)]],
             uint tid [[thread_index_in_threadgroup]], uint3 bid [[threadgroup_position_in_grid]],
             uint3 ng [[threadgroups_per_grid]], uint3 nt3 [[threads_per_threadgroup]]);

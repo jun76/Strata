@@ -485,6 +485,12 @@ def start(cfg_path: Path, port: int | None, open_browser: bool = True) -> int:
 # ------------------------------------------------------------------------------------------------ Qwen3.6 (opt-in)
 Q36_EXE = BUILD_DIR / "strata-q36-metal"
 Q36_CONTEXT_LIMIT = 4096
+# Mac-only extra quant: PC setup and its default model menu are unchanged.
+Q36_MODELS = {**S.OWN_PATH_FAMILIES["qwen36"]["models"],
+              "UD-IQ2_XXS": {"about": "2-bit i-quant, 11.82 GB download"}}
+Q36_HASHES = {**S.OWN_PATH_FAMILIES["qwen36"]["sha256"],
+              "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf":
+              (11819399456, "627e2b05f83088448e27861ec392d56efc2b178783cae5adfa4ad2d988441203")}
 
 
 def q36_args(native: Path, ctx: int) -> list[str]:
@@ -512,8 +518,8 @@ def setup_q36(a, info: dict, data: Path, models_root: Path) -> int:
     """Experimental text-only reference decode, experts streamed from the GGUF on small Macs."""
     fam = S.OWN_PATH_FAMILIES["qwen36"]
     model = a.model or "UD-Q4_K_XL"
-    if model not in fam["models"]:
-        S.fail(f"Qwen3.6 has no {model} file; choose " + ", ".join(fam["models"]))
+    if model not in Q36_MODELS:
+        S.fail(f"Qwen3.6 has no {model} file; choose " + ", ".join(Q36_MODELS))
     ctx = a.context if a.context is not None else Q36_CONTEXT_LIMIT
     try:
         args = q36_args(Path("MODEL"), ctx)
@@ -527,7 +533,7 @@ def setup_q36(a, info: dict, data: Path, models_root: Path) -> int:
     tag = fam["tag"] + model
     folder = Path(a.gguf_dir) if a.gguf_dir else models_root / tag
     native = folder / fam["file"].format(q=model)
-    size, sha = fam["sha256"][native.name]
+    size, sha = Q36_HASHES[native.name]
     if a.gguf_dir and not native.is_file():
         S.fail(f"model missing: {native}")
     if not a.gguf_dir and not native.is_file() and S.free_gb(folder if folder.exists() else data.parent) < size / 1e9 + 1:
@@ -571,7 +577,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--family", choices=["qwen", "unsloth", "qwen36"], default=None,
                     help="qwen = Qwen3.8-Flash-Next (GSQ-RCO), unsloth = Unsloth's UD-*_K_XL (follows --model)")
-    ap.add_argument("--model", choices=list(dict.fromkeys([*MAC_MODELS, *S.OWN_PATH_FAMILIES["qwen36"]["models"]])))
+    ap.add_argument("--model", choices=list(dict.fromkeys([*MAC_MODELS, *Q36_MODELS])))
     ap.add_argument("--context", type=int)
     ap.add_argument("--port", type=int)
     ap.add_argument("--host")
