@@ -37,6 +37,11 @@ with 32 GB, where the experts stream from the SSD. Other chips and memory sizes 
 
 ## Install
 
+This fork also has an opt-in, experimental **Qwen3.6-35B-A3B** Metal path:
+`./setup.sh --family qwen36 --model UD-Q4_K_XL --context 4096 --vision no`.
+It streams the selected experts from the GGUF rather than loading all experts into unified memory.
+Text only, no MTP, at most 4K context; see [MAC_QWEN36.md](MAC_QWEN36.md) for validation and limits.
+
 ```
 git clone https://github.com/Niko1221/Strata && cd Strata
 ./setup.sh                 # asks the size; --yes takes the recommended answers
@@ -177,7 +182,7 @@ The arena was 11.5-14.7 GB. Tokens per second, one token per step (no MTP), medi
 - **One request at a time.** `--parallel` (batch slots) is not ported. Several clients queue.
 - **Not ported:** the control vector (`--control-vector-scaled`) and the PC tuning (`--calibrate`).
 - **Streaming:** measured at 32 GB only. The model's file must be on the internal SSD; an external disk is untested and likely much slower.
-- **Families:** the original Qwen3.8-Flash-Next and Unsloth's UD-Q4/Q5/Q6_K_XL are measured (above). Setup repacks Unsloth's shards into one file for the GPU. The Swift and Coder releases are not set up on Mac yet, and Qwen3.6 does not run on the Mac engine.
+- **Families:** the original Qwen3.8-Flash-Next and Unsloth's UD-Q4/Q5/Q6_K_XL are measured (above). Setup repacks Unsloth's shards into one file for the GPU. The Swift and Coder releases are not set up on Mac yet. This fork adds a separate, experimental Qwen3.6 Metal engine with `--family qwen36` ([limits](MAC_QWEN36.md)).
 - **Engine only from source.** There is no ready-made Mac engine in the release zips.
 
 ## Switches (for testing; all off unless set, the defaults are above)

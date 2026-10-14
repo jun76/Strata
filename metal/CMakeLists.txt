@@ -38,6 +38,11 @@ target_compile_definitions(mtl_rt PRIVATE
   STRATA_METAL_KERNELS_DEFAULT="${CMAKE_CURRENT_SOURCE_DIR}/kernels")
 target_link_libraries(mtl_rt PUBLIC "-framework Metal" "-framework Foundation")
 
+# Experimental Qwen3.6 decode path: only the reference Metal runtime, no CUDA compatibility layer.
+add_executable(strata-q36-metal src/q36_engine.cpp)
+target_include_directories(strata-q36-metal PRIVATE ${STRATA_ROOT}/include)
+target_link_libraries(strata-q36-metal PRIVATE mtl_rt)
+
 file(GLOB STRATA_METAL_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
 list(REMOVE_ITEM STRATA_METAL_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_hello.cpp)
 foreach(src ${STRATA_METAL_TESTS})
@@ -45,6 +50,7 @@ foreach(src ${STRATA_METAL_TESTS})
   add_executable(${t} ${src})
   target_link_libraries(${t} PRIVATE mtl_rt)
 endforeach()
+target_include_directories(q36_parity PRIVATE ${STRATA_ROOT}/include)
 
 # ---- the device runtime and the engine (mac-design) ---------------------------------------------------------------
 set(METAL_CPP_DIR "" CACHE PATH "metal-cpp headers (https://developer.apple.com/metal/cpp/), e.g. metal-cpp_26")

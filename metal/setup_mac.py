@@ -482,12 +482,96 @@ def start(cfg_path: Path, port: int | None, open_browser: bool = True) -> int:
     return subprocess.call(cmd)
 
 
+# ------------------------------------------------------------------------------------------------ Qwen3.6 (opt-in)
+Q36_EXE = BUILD_DIR / "strata-q36-metal"
+Q36_CONTEXT_LIMIT = 4096
+
+
+def q36_args(native: Path, ctx: int) -> list[str]:
+    if not 1 <= ctx <= Q36_CONTEXT_LIMIT:
+        raise ValueError(f"Qwen3.6 Metal context must be 1..{Q36_CONTEXT_LIMIT}")
+    return ["--native", str(native), "--max-context", str(ctx)]
+
+
+def build_q36_engine() -> Path:
+    """Independent Metal target: no CUDA compatibility layer or metal-cpp download."""
+    BUILD_DIR.mkdir(exist_ok=True)
+    log = BUILD_DIR / "q36-build.log"
+    env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
+    cfg = [tool("cmake"), "-S", str(ROOT / "metal"), "-B", str(BUILD_DIR), "-G", "Ninja",
+           "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_MAKE_PROGRAM={tool('ninja')}"]
+    with log.open("w", encoding="utf-8") as f:
+        for cmd in (cfg, [tool("ninja"), "-C", str(BUILD_DIR), "strata-q36-metal"]):
+            if subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, env=env):
+                S.fail(f"Qwen3.6 Metal did not build (see {log})")
+    S.ok(f"Qwen3.6 Metal engine: {Q36_EXE}")
+    return Q36_EXE
+
+
+def setup_q36(a, info: dict, data: Path, models_root: Path) -> int:
+    """Experimental text-only reference decode, experts streamed from the GGUF on small Macs."""
+    fam = S.OWN_PATH_FAMILIES["qwen36"]
+    model = a.model or "UD-Q4_K_XL"
+    if model not in fam["models"]:
+        S.fail(f"Qwen3.6 has no {model} file; choose " + ", ".join(fam["models"]))
+    ctx = a.context if a.context is not None else Q36_CONTEXT_LIMIT
+    try:
+        args = q36_args(Path("MODEL"), ctx)
+    except ValueError as e:
+        S.fail(str(e))
+    if a.vision == "yes":
+        S.fail("Qwen3.6 Metal supports text only; use --vision no")
+    S.say("  Experimental Qwen3.6 Metal: text only, one token at a time, no MTP draft layer.")
+    S.say("  Dense weights and a bounded selected-expert buffer stay in memory; remaining experts come from the SSD.")
+    S.say("  Use the internal SSD. Large prompts can be slow on a Mac with 16 GB.")
+    tag = fam["tag"] + model
+    folder = Path(a.gguf_dir) if a.gguf_dir else models_root / tag
+    native = folder / fam["file"].format(q=model)
+    size, sha = fam["sha256"][native.name]
+    if a.gguf_dir and not native.is_file():
+        S.fail(f"model missing: {native}")
+    if not a.gguf_dir and not native.is_file() and S.free_gb(folder if folder.exists() else data.parent) < size / 1e9 + 1:
+        S.fail(f"not enough disk for {size / 1e9:.1f} GB model in {folder}")
+    S.step(3, "Python packages")
+    S.pip_install(S.requirement_lines() if S.REQUIREMENTS.exists() else S.PY_PACKAGES,
+                  "server, tokenizer and build dependencies")
+    S.step(4, "Qwen3.6 Metal engine")
+    exe = build_q36_engine()
+    if a.update:
+        return 0
+    llama = S.get_llama_cpp()       # pinned gguf-py for the same tokenizer as on the PC
+    S.step(5, f"downloading {fam['title']} {model}")
+    folder.mkdir(parents=True, exist_ok=True)
+    if not (native.is_file() and S.done(native)) and not a.gguf_dir:
+        S.download(fam["hf"] + native.name, native)
+    S.verify_sha256(native, size, sha)
+    S.step(6, "preparing the tokenizer")
+    pack = data / "packs" / tag.lower()
+    if not (pack / "tokenizer" / "vocab.json").is_file():
+        S.run([sys.executable, str(ROOT / "tools/strata_tokenizer.py"), "--gguf", str(native), "--out", str(pack)],
+              env=dict(os.environ, STRATA_GGUF_PY=str(llama / "gguf-py")))
+    port = a.port or 8080
+    cfg = mac_config(exe, q36_args(native, ctx), pack, f"{fam['name']}-{model.lower()}", tag, port)
+    cfg["arch"] = "qwen35moe"
+    for key in ("host", "api_key"):
+        if getattr(a, key):
+            cfg[key] = getattr(a, key)
+    if a.browser is not None:
+        cfg["open_browser"] = a.browser
+    cfg_path = ROOT / f"strata-{tag.lower()}.json"
+    S.write_config(cfg_path, cfg)
+    script = S.write_run_script(tag, cfg_path, port, cfg.get("open_browser") is not False)
+    S.ok(f"start script: {script.name}")
+    S.say(f"  Chat and API: http://127.0.0.1:{port}")
+    return 0 if a.no_start else start(cfg_path, port, a.browser is not False)
+
+
 # ------------------------------------------------------------------------------------------------ main
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--family", choices=["qwen", "unsloth"], default=None,
+    ap.add_argument("--family", choices=["qwen", "unsloth", "qwen36"], default=None,
                     help="qwen = Qwen3.8-Flash-Next (GSQ-RCO), unsloth = Unsloth's UD-*_K_XL (follows --model)")
-    ap.add_argument("--model", choices=list(MAC_MODELS))
+    ap.add_argument("--model", choices=list(dict.fromkeys([*MAC_MODELS, *S.OWN_PATH_FAMILIES["qwen36"]["models"]])))
     ap.add_argument("--context", type=int)
     ap.add_argument("--port", type=int)
     ap.add_argument("--host")
@@ -514,7 +598,7 @@ def main(argv=None) -> int:
     models_root = Path(a.models_dir) if a.models_dir else data / "models"
 
     have = mac_configs()
-    if have and not (a.setup or a.model or a.check or a.no_start or a.update or a.build):
+    if have and not (a.setup or a.family or a.model or a.check or a.no_start or a.update or a.build):
         return start(have[0], a.port, a.browser is not False)
 
     # ---- 1. the Mac
@@ -530,6 +614,11 @@ def main(argv=None) -> int:
         return 1 if problems else 0
     if problems:
         S.fail(problems[0])
+
+    if a.family == "qwen36":
+        return setup_q36(a, info, data, models_root)
+    if a.model and a.model not in MAC_MODELS:
+        S.fail(f"{a.model} needs --family qwen36 on a Mac")
 
     # ---- 2. the choices
     S.step(2, "your choices")
