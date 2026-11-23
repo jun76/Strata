@@ -284,6 +284,11 @@ drafting and picture reading (`Inkling-2-Mini-Vision.strata`, 0.64 GB).
 strata launch --family inkling-2-mini --model SQ-15
 ```
 
+On NVIDIA, select `--vision gpu` to enable Inkling's CUDA picture encoder. It needs about 1.3 GB for FP32
+weights plus workspace for each picture. The default and `--vision cpu` use the CPU encoder. An explicit GPU
+selection falls back to the CPU encoder when CUDA runs out of room. For an existing run config, put
+`"STRATA_INKLING_VISION_CUDA": "1"` in its `env` object to opt in.
+
 ## Adding or switching models
 
 - **In the app:** the Models page lists every model with its size and whether it fits your computer. Pick one and press the install button.

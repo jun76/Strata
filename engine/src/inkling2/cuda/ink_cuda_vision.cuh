@@ -322,8 +322,12 @@ public:
         float* mid = static_cast<float*>(dalloc(static_cast<size_t>(n_tok) * vc.proj_hidden * 4));
         float* dout = static_cast<float*>(dalloc(static_cast<size_t>(n_tok) * vc.out_hidden * 4));
         float* sc = static_cast<float*>(dalloc(static_cast<size_t>(qb) * S * 4));
-        __nv_bfloat16* xbf = static_cast<__nv_bfloat16*>(dalloc(static_cast<size_t>(rows_max) * cols_max * 2));
-        if (bufs.size() != 16) {   // dalloc keeps only what it got
+        __nv_bfloat16* xbf = nullptr;
+        if (bf16_weights_) {
+            xbf = static_cast<__nv_bfloat16*>(dalloc(static_cast<size_t>(rows_max) * cols_max * sizeof(*xbf)));
+        }
+        if (!d_patch || !d_pos || !d_rc || !d_rs || !cur || !nrm || !q || !k || !v || !ao ||
+            !proj || !mlp || !mid || !dout || !sc || (bf16_weights_ && !xbf)) {
             err = "vit: cudaMalloc failed for a picture of " + std::to_string(S) + " patches";
             free_all();
             return false;

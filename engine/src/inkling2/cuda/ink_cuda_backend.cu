@@ -112,7 +112,8 @@ public:
         }
         // Resolve primary + optional multi-GPU list (up to 4 GPUs!) from opts.gpu_ids / opts.gpu_index / opts.gpus
         gpu_id_ = (opts.gpu_index >= 0 && opts.gpu_index < n_dev) ? opts.gpu_index : 0;
-        vision_path_ = opts.vision_path;
+        const char* vision_cuda = std::getenv("STRATA_INKLING_VISION_CUDA");
+        vision_path_ = vision_cuda && std::strcmp(vision_cuda, "1") == 0 ? opts.vision_path : "";
         std::vector<int> all_gpus;
         if (!opts.gpu_ids.empty()) {
             for (int g : opts.gpu_ids) {
@@ -838,6 +839,10 @@ public:
             (void)err;
             return false;
         }
+        if (!vit_reported_) {
+            fprintf(stderr, "[inkling2-vision] encoded first image on CUDA device %d\n", gpu_id_);
+            vit_reported_ = true;
+        }
         return true;
     }
 
@@ -877,6 +882,7 @@ private:
     void cleanup() {
         vit_.release();
         vit_failed_ = false;
+        vit_reported_ = false;
         if (dspark_) { dspark_->free_all(); dspark_.reset(); }
         if (runner_) { runner_->free_all(); runner_.reset(); }
         if (d_sconv_snap_) { cudaFree(d_sconv_snap_); d_sconv_snap_ = nullptr; }
@@ -911,6 +917,7 @@ private:
     std::string vision_path_;
     cuvit::CudaVit vit_;
     bool vit_failed_ = false;
+    bool vit_reported_ = false;
     strata::ink::InkCudaModel model_;
     std::unique_ptr<strata::ink::InkCudaRunner> runner_;
     std::unique_ptr<strata::ink::InkDSpark> dspark_;

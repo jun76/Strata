@@ -301,6 +301,29 @@ class RunConfig(unittest.TestCase):
     BASE = {"exe": "component:strata-engine", "args": ["--native", "x.gguf", "--max-context", "32768", "--kv", "int8", "--prefill", "auto"],
             "port": 8095, "model_name": "m", "env": {}}
 
+    def test_inkling_cuda_vision_follows_explicit_choice(self):
+        flag = "STRATA_INKLING_VISION_CUDA"
+        base = {
+            "exe": "component:strata-inkling",
+            "arch": "inkling2_loop",
+            "args": ["--vision", "vision.strata"],
+            "env": {"OMP_NUM_THREADS": "4"},
+        }
+        for vision, requested in ((None, None), ("on", None), ("cpu", "0"), ("gpu", "1")):
+            with self.subTest(vision=vision):
+                settings = S.LaunchSettings(family="inkling-2-mini", vision=vision)
+                cfg = derive_config(base, settings, bool_flags=frozenset())
+                self.assertEqual(cfg["env"].get(flag), requested)
+                self.assertEqual(cfg["env"]["OMP_NUM_THREADS"], "4")
+                self.assertEqual(cfg["args"], base["args"])
+        self.assertNotIn(flag, base["env"])
+
+    def test_inkling_explicit_cpu_overrides_cuda_vision_environment(self):
+        flag = "STRATA_INKLING_VISION_CUDA"
+        base = {"arch": "inkling2_loop", "args": ["--vision", "vision.strata"], "env": {flag: "1"}}
+        cfg = derive_config(base, S.LaunchSettings(vision="cpu"), bool_flags=frozenset())
+        self.assertEqual(cfg["env"][flag], "0")
+
     def test_derive_applies_access_key_and_advanced(self):
         s = S.LaunchSettings(access="lan", port=9001, api_key="sk-k", extra={"--prefill": "65536", "--kv-grow": "", "STRATA_PIN_BY_NEED": "1"})
         cfg = derive_config(self.BASE, s, bool_flags=frozenset({"--kv-grow"}))

@@ -759,6 +759,8 @@ def derive_config(base: dict, s: S.LaunchSettings, *, bool_flags: frozenset[str]
     arg_layers.layer(cfg, a_changes, prev, bool_flags)       # the one place that decides which value an option has
     if e_changes:
         cfg["env"] = tune_knobs.apply_to_env(dict(cfg.get("env") or {}), e_changes)
+    if is_inkling and s.vision in ("cpu", "gpu"):
+        cfg["env"] = {**(cfg.get("env") or {}), "STRATA_INKLING_VISION_CUDA": "1" if s.vision == "gpu" else "0"}
     from strata_control import draft_layer
     draft_layer.apply(cfg)                                   # "mtp": false (from the installed config too) never sits beside --mtp in the saved args (B10)
     apply_user_defaults(cfg, base, defaults or {})            # #5858: the user's run-defaults.json, below everything else
